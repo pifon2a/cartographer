@@ -17,6 +17,7 @@
 #include "cartographer/mapping/internal/2d/pose_graph_2d.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -39,17 +40,25 @@
 namespace cartographer {
 namespace mapping {
 
+using namespace std::chrono;
+
 PoseGraph2D::PoseGraph2D(
     const proto::PoseGraphOptions& options,
     std::unique_ptr<pose_graph::OptimizationProblem2D> optimization_problem,
     common::ThreadPool* thread_pool)
     : options_(options),
       optimization_problem_(std::move(optimization_problem)),
-      constraint_builder_(options_.constraint_builder_options(), thread_pool) {}
+      constraint_builder_(options_.constraint_builder_options(), thread_pool),
+      log_file_(::cartographer::common::make_unique<std::ofstream>(
+          "/usr/local/google/home/pifon/workspace/bags/timelog.txt",
+          std::ios_base::out)) {
+  (*log_file_) << "#\tduration\t#constraints\t#submaps\t#nodes" << std::endl;
+}
 
 PoseGraph2D::~PoseGraph2D() {
   WaitForAllComputations();
   common::MutexLocker locker(&mutex_);
+  log_file_->close();
   CHECK(work_queue_ == nullptr);
 }
 
@@ -62,9 +71,9 @@ std::vector<SubmapId> PoseGraph2D::InitializeGlobalSubmapPoses(
     // If we don't already have an entry for the first submap, add one.
     if (submap_data.SizeOfTrajectoryOrZero(trajectory_id) == 0) {
       if (initial_trajectory_poses_.count(trajectory_id) > 0) {
-        trajectory_connectivity_state_.Connect(
-            trajectory_id,
-            initial_trajectory_poses_.at(trajectory_id).to_trajectory_id, time);
+       // trajectory_connectivity_state_.Connect(
+        //    trajectory_id,
+         //   initial_trajectory_poses_.at(trajectory_id).to_trajectory_id, time);
       }
       optimization_problem_->AddSubmap(
           trajectory_id,
@@ -341,7 +350,7 @@ void PoseGraph2D::HandleWorkQueue() {
         }
         TrimmingHandle trimming_handle(this);
         for (auto& trimmer : trimmers_) {
-          trimmer->Trim(&trimming_handle);
+          trimmer->Trim(&trimming_handle,log_file_.get());
         }
         trimmers_.erase(
             std::remove_if(trimmers_.begin(), trimmers_.end(),
@@ -496,11 +505,16 @@ void PoseGraph2D::AddNodeToSubmap(const NodeId& node_id,
 
 void PoseGraph2D::AddSerializedConstraints(
     const std::vector<Constraint>& constraints) {
+  LOG(INFO) << "!!!! in pose graph adding constraints = " << constraints.size();
   common::MutexLocker locker(&mutex_);
   AddWorkItem([this, constraints]() REQUIRES(mutex_) {
     for (const auto& constraint : constraints) {
       CHECK(trajectory_nodes_.Contains(constraint.node_id));
-      CHECK(submap_data_.Contains(constraint.submap_id));
+      // DO NOT SUBMIT, this was needed for an older bag file.
+      if (!submap_data_.Contains(constraint.submap_id)) {
+        LOG(ERROR) << "Could not find submap_id " << constraint.submap_id;
+        continue;
+      }
       CHECK(trajectory_nodes_.at(constraint.node_id).constant_data != nullptr);
       CHECK(submap_data_.at(constraint.submap_id).submap != nullptr);
       switch (constraint.tag) {
@@ -561,12 +575,23 @@ void PoseGraph2D::RunOptimization() {
   // frozen_trajectories_ and landmark_nodes_ when executing the Solve. Solve is
   // time consuming, so not taking the mutex before Solve to avoid blocking
   // foreground processing.
+  auto start = high_resolution_clock::now();
   optimization_problem_->Solve(constraints_, frozen_trajectories_,
                                landmark_nodes_);
+  auto stop = high_resolution_clock::now();
+  auto duration = duration_cast<microseconds>(stop - start).count();
+  // constraints-nodes-submaps size
+  // time to solve
   common::MutexLocker locker(&mutex_);
 
   const auto& submap_data = optimization_problem_->submap_data();
   const auto& node_data = optimization_problem_->node_data();
+  LOG(INFO) << "!!!! " << optimization_run_ << "\t" << duration << "\t"
+            << constraints_.size() << "\t" << submap_data.size() << "\t"
+            << node_data.size();
+  (*log_file_) << optimization_run_++ << "\t" << duration << "\t"
+               << constraints_.size() << "\t" << submap_data.size() << "\t"
+               << node_data.size() << std::endl;
   for (const int trajectory_id : node_data.trajectory_ids()) {
     for (const auto& node : node_data.trajectory(trajectory_id)) {
       auto& mutable_trajectory_node = trajectory_nodes_.at(node.id);
@@ -800,7 +825,7 @@ MapById<SubmapId, PoseGraphInterface::SubmapData>
 PoseGraph2D::TrimmingHandle::GetOptimizedSubmapData() const {
   MapById<SubmapId, PoseGraphInterface::SubmapData> submaps;
   for (const auto& submap_id_data : parent_->submap_data_) {
-    if (submap_id_data.data.state == SubmapState::kFinished ||
+    if (submap_id_data.data.state != SubmapState::kFinished ||
         !parent_->global_submap_poses_.Contains(submap_id_data.id)) {
       continue;
     }
@@ -841,7 +866,8 @@ void PoseGraph2D::TrimmingHandle::MarkSubmapAsTrimmed(
     const SubmapId& submap_id) {
   // TODO(hrapp): We have to make sure that the trajectory has been finished
   // if we want to delete the last submaps.
-  CHECK(parent_->submap_data_.at(submap_id).state == SubmapState::kFinished);
+  CHECK(parent_->submap_data_.at(submap_id).state == SubmapState::kFinished)
+      << "!!! submap id = " << submap_id;
 
   // Compile all nodes that are still INTRA_SUBMAP constrained once the submap
   // with 'submap_id' is gone.

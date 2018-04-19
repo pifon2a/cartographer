@@ -193,24 +193,26 @@ std::string MapBuilder::SubmapToProto(
   return "";
 }
 
-void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
+void MapBuilder::SerializeState(
+    const std::vector<proto::TrajectoryBuilderOptionsWithSensorIds>&
+        all_trajectory_builder_options,
+    PoseGraph* const pose_graph, io::ProtoStreamWriterInterface* const writer) {
   // We serialize the pose graph followed by all the data referenced in it.
-  writer->WriteProto(pose_graph_->ToProto());
+  writer->WriteProto(pose_graph->ToProto());
   // Serialize trajectory builder options.
   {
     proto::AllTrajectoryBuilderOptions all_builder_options_proto;
-    for (const auto& options_with_sensor_ids :
-         all_trajectory_builder_options_) {
+    for (const auto& options_with_sensor_ids : all_trajectory_builder_options) {
       *all_builder_options_proto.add_options_with_sensor_ids() =
           options_with_sensor_ids;
     }
-    CHECK_EQ(all_trajectory_builder_options_.size(),
+    CHECK_EQ(all_trajectory_builder_options.size(),
              all_builder_options_proto.options_with_sensor_ids_size());
     writer->WriteProto(all_builder_options_proto);
   }
   // Next we serialize all submap data.
   {
-    for (const auto& submap_id_data : pose_graph_->GetAllSubmapData()) {
+    for (const auto& submap_id_data : pose_graph->GetAllSubmapData()) {
       proto::SerializedData proto;
       auto* const submap_proto = proto.mutable_submap();
       submap_proto->mutable_submap_id()->set_trajectory_id(
@@ -224,7 +226,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   }
   // Next we serialize all node data.
   {
-    for (const auto& node_id_data : pose_graph_->GetTrajectoryNodes()) {
+    for (const auto& node_id_data : pose_graph->GetTrajectoryNodes()) {
       proto::SerializedData proto;
       auto* const node_proto = proto.mutable_node();
       node_proto->mutable_node_id()->set_trajectory_id(
@@ -237,7 +239,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   }
   // Next we serialize IMU data from the pose graph.
   {
-    const auto all_imu_data = pose_graph_->GetImuData();
+    const auto all_imu_data = pose_graph->GetImuData();
     for (const int trajectory_id : all_imu_data.trajectory_ids()) {
       for (const auto& imu_data : all_imu_data.trajectory(trajectory_id)) {
         proto::SerializedData proto;
@@ -250,7 +252,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   }
   // Next we serialize odometry data from the pose graph.
   {
-    const auto all_odometry_data = pose_graph_->GetOdometryData();
+    const auto all_odometry_data = pose_graph->GetOdometryData();
     for (const int trajectory_id : all_odometry_data.trajectory_ids()) {
       for (const auto& odometry_data :
            all_odometry_data.trajectory(trajectory_id)) {
@@ -265,7 +267,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   }
   // Next we serialize all fixed frame pose data from the pose graph.
   {
-    const auto all_fixed_frame_pose_data = pose_graph_->GetFixedFramePoseData();
+    const auto all_fixed_frame_pose_data = pose_graph->GetFixedFramePoseData();
     for (const int trajectory_id : all_fixed_frame_pose_data.trajectory_ids()) {
       for (const auto& fixed_frame_pose_data :
            all_fixed_frame_pose_data.trajectory(trajectory_id)) {
@@ -281,7 +283,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   }
   // Next we serialize all trajectory data.
   {
-    const auto all_trajectory_data = pose_graph_->GetTrajectoryData();
+    const auto all_trajectory_data = pose_graph->GetTrajectoryData();
     for (const auto& trajectory_data : all_trajectory_data) {
       proto::SerializedData proto;
       auto* const trajectory_data_proto = proto.mutable_trajectory_data();
@@ -304,7 +306,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
   // Next we serialize all landmark data.
   {
     const std::map<std::string /* landmark ID */, PoseGraph::LandmarkNode>
-        all_landmark_nodes = pose_graph_->GetLandmarkNodes();
+        all_landmark_nodes = pose_graph->GetLandmarkNodes();
     for (const auto& node : all_landmark_nodes) {
       for (const auto& observation : node.second.landmark_observations) {
         proto::SerializedData proto;
@@ -328,6 +330,7 @@ void MapBuilder::SerializeState(io::ProtoStreamWriterInterface* const writer) {
 
 void MapBuilder::LoadState(io::ProtoStreamReaderInterface* const reader,
                            bool load_frozen_state) {
+  LOG(INFO) << "frozen = "<< load_frozen_state;
   proto::PoseGraph pose_graph_proto;
   CHECK(reader->ReadProto(&pose_graph_proto));
   proto::AllTrajectoryBuilderOptions all_builder_options_proto;
@@ -370,6 +373,7 @@ void MapBuilder::LoadState(io::ProtoStreamReaderInterface* const reader,
                           transform::ToRigid3(submap_proto.pose()));
     }
   }
+  LOG(INFO) << "!!!Submaps = " << submap_poses.size();
 
   MapById<NodeId, transform::Rigid3d> node_poses;
   for (const proto::Trajectory& trajectory_proto :
@@ -380,6 +384,7 @@ void MapBuilder::LoadState(io::ProtoStreamReaderInterface* const reader,
           transform::ToRigid3(node_proto.pose()));
     }
   }
+  LOG(INFO) << "!!!Nodes = " << node_poses.size();
 
   // Set global poses of landmarks.
   for (const auto& landmark : pose_graph_proto.landmark_poses()) {
@@ -440,6 +445,7 @@ void MapBuilder::LoadState(io::ProtoStreamReaderInterface* const reader,
   }
 
   if (load_frozen_state) {
+    LOG(INFO)<< "!!!! WTF am i here" << pose_graph_proto.constraint_size();
     // Add information about which nodes belong to which submap.
     // Required for 3D pure localization.
     for (const proto::PoseGraph::Constraint& constraint_proto :
@@ -455,6 +461,7 @@ void MapBuilder::LoadState(io::ProtoStreamReaderInterface* const reader,
                    constraint_proto.submap_id().submap_index()});
     }
   } else {
+    LOG(INFO)<< "!!!! map builder loads constraints #" << pose_graph_proto.constraint_size();
     // When loading unfrozen trajectories, 'AddSerializedConstraints' will
     // take care of adding information about which nodes belong to which
     // submap.

@@ -17,7 +17,11 @@
 #include "cartographer/mapping/internal/2d/overlapping_submaps_trimmer_2d.h"
 
 #include <algorithm>
+#include <iostream>
 
+#include "cartographer/io/color.h"
+#include "cartographer/io/proto_stream.h"
+#include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 
 namespace cartographer {
@@ -35,8 +39,8 @@ class SubmapCoverageGrid2D {
 
   void AddPoint(const Eigen::Vector2d& point, const SubmapId& submap_id,
                 const common::Time& time) {
-    CellId cell_id{common::RoundToInt64(offset_(0) - point(0)),
-                   common::RoundToInt64(offset_(1) - point(1))};
+    CellId cell_id{common::RoundToInt64(point(0) / 0.05),
+                   common::RoundToInt64(point(1) / 0.05)};
     cells_[cell_id].emplace_back(submap_id, time);
   }
 
@@ -79,14 +83,21 @@ std::set<SubmapId> AddSubmapsToSubmapCoverageGrid2D(
       LOG(WARNING) << "Empty grid found in submap ID = " << submap.id;
       continue;
     }
-    const transform::Rigid2d projected_submap_pose =
-        transform::Project2D(submap.data.pose);
+    MapLimits map_limits = probability_grid.limits();
     for (const Eigen::Array2i& xy_index : XYIndexRangeIterator(cell_limits)) {
       const Eigen::Array2i index = xy_index + offset;
       if (!probability_grid.IsKnown(index)) continue;
+      const transform::Rigid3d point = transform::Rigid3d::Translation(
+          Eigen::Vector3d(map_limits.max().x() -
+                              map_limits.resolution() * (index.y() + 0.5),
+                          map_limits.max().y() -
+                              map_limits.resolution() * (index.x() + 0.5),
+                          0));
+
       const transform::Rigid2d center_of_cell_in_global_frame =
-          projected_submap_pose *
-          transform::Rigid2d::Translation({index.x() + 0.5, index.y() + 0.5});
+          transform::Project2D(submap.data.pose *
+                               submap.data.submap->local_pose().inverse() *
+                               point);
       coverage_grid->AddPoint(center_of_cell_in_global_frame.translation(),
                               submap.id, freshness->second);
     }
@@ -101,7 +112,8 @@ std::map<SubmapId, common::Time> ComputeSubmapFreshness(
     const MapById<NodeId, TrajectoryNode>& trajectory_nodes,
     const std::vector<PoseGraphInterface::Constraint>& constraints) {
   std::map<SubmapId, common::Time> submap_freshness;
-
+  LOG(INFO) << "!!! trajectory nodes size = " << trajectory_nodes.size();
+  LOG(INFO) << "!!! constraints size = " << constraints.size();
   // Find the node with the largest NodeId per SubmapId.
   std::map<SubmapId, NodeId> submap_to_latest_node;
   for (const PoseGraphInterface::Constraint& constraint : constraints) {
@@ -168,6 +180,7 @@ std::vector<SubmapId> FindSubmapIdsToTrim(
   }
 
   DCHECK(std::is_sorted(submap_ids_to_keep.begin(), submap_ids_to_keep.end()));
+  DCHECK(std::is_sorted(all_submap_ids.begin(), all_submap_ids.end()));
   std::vector<SubmapId> result;
   std::set_difference(all_submap_ids.begin(), all_submap_ids.end(),
                       submap_ids_to_keep.begin(), submap_ids_to_keep.end(),
@@ -175,24 +188,98 @@ std::vector<SubmapId> FindSubmapIdsToTrim(
   return result;
 }
 
+void WritePgm(const ::cartographer::io::Image& image, const double resolution,
+              ::cartographer::io::FileWriter* file_writer) {
+  const std::string header = "P5\n# Cartographer map; " +
+                             std::to_string(resolution) + " m/pixel\n" +
+                             std::to_string(image.width()) + " " +
+                             std::to_string(image.height()) + "\n255\n";
+  file_writer->Write(header.data(), header.size());
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const char color = image.GetPixel(x, y)[0];
+      file_writer->Write(&color, 1);
+    }
+  }
+}
+
+void DrawTrimmedSubmaps(
+    const MapById<SubmapId, PoseGraphInterface::SubmapData>& submap_data,
+    const std::vector<SubmapId>& trimmed_ids, const std::string& filename) {
+  std::map<SubmapId, io::SubmapSlice> submap_slices;
+  for (const SubmapId& id : trimmed_ids) {
+    const auto& submap = submap_data.find(id)->data;
+    proto::Submap submap_proto;
+    submap.submap->ToProto(&submap_proto, true);
+    FillSubmapSlice(submap.pose, submap_proto, &submap_slices[id]);
+  }
+  LOG(INFO) << "Generating combined map image from submap slices.";
+  auto result = io::PaintSubmapSlices(submap_slices, 0.05);
+  io::StreamFileWriter pgm_writer(filename + ".pgm");
+  io::Image image(std::move(result.surface));
+  WritePgm(image, 0.05, &pgm_writer);
+}
+
+void DrawGlobalGrid(const SubmapCoverageGrid2D& global_grid,
+                    const std::string& filename) {
+  int64 max_x = std::numeric_limits<int64>::min();
+  int64 max_y = std::numeric_limits<int64>::min();
+  int64 min_x = std::numeric_limits<int64>::max();
+  int64 min_y = std::numeric_limits<int64>::max();
+  for (const auto& item : global_grid.cells()) {
+    max_x = std::max(max_x, item.first.first);
+    max_y = std::max(max_y, item.first.second);
+    min_x = std::min(min_x, item.first.first);
+    min_y = std::min(min_y, item.first.second);
+  }
+  io::Image image(max_x - min_x + 10, max_y - min_y + 10);
+  for (const auto& item : global_grid.cells()) {
+    image.SetPixel(static_cast<int64>(item.first.first) - min_x + 5,
+                   static_cast<int64>(item.first.second) - min_y + 5,
+                   {{item.second.size() * 10, item.second.size() * 10, item.second.size() * 10}});
+  }
+  io::StreamFileWriter pgm_writer(filename + ".pgm");
+
+  WritePgm(image, 0.05, &pgm_writer);
+}
+
 }  // namespace
 
-void OverlappingSubmapsTrimmer2D::Trim(Trimmable* pose_graph) {
+void OverlappingSubmapsTrimmer2D::Trim(Trimmable* pose_graph,
+                                       std::ostream* log) {
   const auto submap_data = pose_graph->GetOptimizedSubmapData();
+  LOG(INFO) << "!!!! submap_data size = " << submap_data.size();
+  LOG(INFO) << "!!!! min_added_submaps_count = " << min_added_submaps_count_;
+  LOG(INFO) << "!!!! current_submap_count_ = " << current_submap_count_;
+
   if (submap_data.size() - current_submap_count_ <= min_added_submaps_count_) {
     return;
   }
-
+  LOG(INFO) << "!!!! trimmer engaged.";
   SubmapCoverageGrid2D coverage_grid(GetCornerOfFirstSubmap(submap_data));
   const std::map<SubmapId, common::Time> submap_freshness =
       ComputeSubmapFreshness(submap_data, pose_graph->GetTrajectoryNodes(),
                              pose_graph->GetConstraints());
+  LOG(INFO) << "!!!! submap freshness size = " << submap_freshness.size();
   const std::set<SubmapId> all_submap_ids = AddSubmapsToSubmapCoverageGrid2D(
       submap_freshness, submap_data, &coverage_grid);
+  LOG(INFO) << "!!!! all submap ids = " << all_submap_ids.size();
+  (*log) << std::string("number_of_cells_in_global_grid = ")
+         << coverage_grid.cells().size() << std::endl;
   const std::vector<SubmapId> submap_ids_to_remove =
       FindSubmapIdsToTrim(coverage_grid, all_submap_ids, fresh_submaps_count_,
                           min_covered_cells_count_);
   current_submap_count_ = submap_data.size() - submap_ids_to_remove.size();
+  static int image_count = 0;
+  DrawGlobalGrid(
+      coverage_grid,
+      std::string("/usr/local/google/home/pifon/workspace/bags/global_map") +
+          std::to_string(image_count));
+  // DrawTrimmedSubmaps(
+  //   submap_data, submap_ids_to_remove,
+  // std::string("/usr/local/google/home/pifon/workspace/bags/trimmed_map") +
+  //   std::to_string(image_count));
+  image_count++;
   for (const SubmapId& id : submap_ids_to_remove) {
     pose_graph->MarkSubmapAsTrimmed(id);
   }

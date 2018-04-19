@@ -35,7 +35,7 @@ class OverlappingSubmapsTrimmer2D : public PoseGraphTrimmer {
         min_added_submaps_count_(min_added_submaps_count) {}
   ~OverlappingSubmapsTrimmer2D() override = default;
 
-  void Trim(Trimmable* pose_graph) override;
+  void Trim(Trimmable* pose_graph, std::ostream* log = nullptr) override;
   bool IsFinished() override { return finished_; }
 
  private:

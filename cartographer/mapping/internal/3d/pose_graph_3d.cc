@@ -838,7 +838,7 @@ MapById<SubmapId, PoseGraphInterface::SubmapData>
 PoseGraph3D::TrimmingHandle::GetOptimizedSubmapData() const {
   MapById<SubmapId, PoseGraphInterface::SubmapData> submaps;
   for (const auto& submap_id_data : parent_->submap_data_) {
-    if (submap_id_data.data.state == SubmapState::kFinished ||
+    if (submap_id_data.data.state != SubmapState::kFinished ||
         !parent_->global_submap_poses_.Contains(submap_id_data.id)) {
       continue;
     }

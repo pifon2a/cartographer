@@ -19,7 +19,7 @@
 
 #include "cartographer/mapping/id.h"
 #include "cartographer/mapping/pose_graph_interface.h"
-
+#include <iostream>
 namespace cartographer {
 namespace mapping {
 
@@ -54,7 +54,7 @@ class PoseGraphTrimmer {
   virtual ~PoseGraphTrimmer() {}
 
   // Called once after each pose graph optimization.
-  virtual void Trim(Trimmable* pose_graph) = 0;
+  virtual void Trim(Trimmable* pose_graph, std::ostream* log = nullptr) = 0;
 
   // Checks if this trimmer is in a terminatable state.
   virtual bool IsFinished() = 0;
@@ -67,7 +67,7 @@ class PureLocalizationTrimmer : public PoseGraphTrimmer {
   PureLocalizationTrimmer(int trajectory_id, int num_submaps_to_keep);
   ~PureLocalizationTrimmer() override {}
 
-  void Trim(Trimmable* pose_graph) override;
+  void Trim(Trimmable* pose_graph, std::ostream* log = nullptr) override;
   bool IsFinished() override;
 
  private:

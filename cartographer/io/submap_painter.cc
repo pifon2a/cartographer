@@ -93,7 +93,7 @@ PaintSubmapSlicesResult PaintSubmapSlices(
       cairo_image_surface_create(kCairoFormat, size.x(), size.y()));
   {
     auto cr = MakeUniqueCairoPtr(cairo_create(surface.get()));
-    cairo_set_source_rgba(cr.get(), 0.5, 0.0, 0.0, 1.);
+    cairo_set_source_rgba(cr.get(), 0.0, 0.0, 0.5, 1.);
     cairo_paint(cr.get());
     cairo_translate(cr.get(), origin.x(), origin.y());
     CairoPaintSubmapSlices(1. / resolution, submaps, cr.get(),
@@ -125,7 +125,7 @@ void FillSubmapSlice(
   submap_slice->pose = global_submap_pose;
 
   auto& texture_proto = response.textures(0);
-  const SubmapTexture::Pixels pixels = UnpackTextureData(
+  SubmapTexture::Pixels pixels = UnpackTextureData(
       texture_proto.cells(), texture_proto.width(), texture_proto.height());
   submap_slice->width = texture_proto.width();
   submap_slice->height = texture_proto.height();
@@ -166,14 +166,16 @@ UniqueCairoSurfacePtr DrawTexture(const std::vector<char>& intensity,
   const int expected_stride = 4 * width;
   CHECK_EQ(expected_stride, cairo_format_stride_for_width(kCairoFormat, width));
   for (size_t i = 0; i < intensity.size(); ++i) {
-    // We use the red channel to track intensity information. The green
-    // channel we use to track if a cell was ever observed.
     const uint8_t intensity_value = intensity.at(i);
     const uint8_t alpha_value = alpha.at(i);
-    const uint8_t observed =
-        (intensity_value == 0 && alpha_value == 0) ? 0 : 255;
-    cairo_data->push_back((alpha_value << 24) | (intensity_value << 16) |
-                          (observed << 8) | 0);
+    bool known = !(intensity_value == 0 && alpha_value == 0);
+    // DO NOT SUBMIT
+    // This low opacity is necessary to see overlapping submaps but would break
+    // callers in cartographer_ros.
+    uint8_t opacity = (known) ? 5 : 0;
+    uint32_t argb = (opacity << 24) | (intensity_value << 16) |
+                    (intensity_value << 8) | (intensity_value);
+    cairo_data->push_back(argb);
   }
 
   auto surface = MakeUniqueCairoSurfacePtr(cairo_image_surface_create_for_data(

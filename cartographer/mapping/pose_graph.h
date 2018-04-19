@@ -139,6 +139,14 @@ class PoseGraph : public PoseGraphInterface {
                                         int to_trajectory_id,
                                         const transform::Rigid3d& pose,
                                         const common::Time time) = 0;
+
+  virtual void FindInterTrajectoryConstraints() {
+    LOG(FATAL) << "not implemented";
+  };
+
+  virtual void FindInterTrajectoryGlobalConstraints() {
+    LOG(FATAL) << "not implemented";
+  };
 };
 
 std::vector<PoseGraph::Constraint> FromProto(

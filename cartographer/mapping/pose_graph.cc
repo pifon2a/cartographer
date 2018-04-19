@@ -54,6 +54,8 @@ std::vector<PoseGraph::Constraint> FromProto(
         constraint_protos) {
   std::vector<PoseGraph::Constraint> constraints;
   for (const auto& constraint_proto : constraint_protos) {
+    CHECK(constraint_proto.has_submap_id());
+    CHECK(constraint_proto.has_node_id());
     const mapping::SubmapId submap_id{
         constraint_proto.submap_id().trajectory_id(),
         constraint_proto.submap_id().submap_index()};

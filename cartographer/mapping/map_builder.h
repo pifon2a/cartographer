@@ -56,7 +56,15 @@ class MapBuilder : public MapBuilderInterface {
   std::string SubmapToProto(const SubmapId& submap_id,
                             proto::SubmapQuery::Response* response) override;
 
-  void SerializeState(io::ProtoStreamWriterInterface* writer) override;
+  void SerializeState(io::ProtoStreamWriterInterface* writer) override {
+    SerializeState(all_trajectory_builder_options_, pose_graph_.get(), writer);
+  }
+
+  // TODO(gaschler): Consider moving parts of this to PoseGraph.
+  static void SerializeState(
+      const std::vector<proto::TrajectoryBuilderOptionsWithSensorIds>&
+          all_trajectory_builder_options,
+      PoseGraph* pose_graph, io::ProtoStreamWriterInterface* writer);
 
   void LoadState(io::ProtoStreamReaderInterface* reader,
                  bool load_frozen_state) override;

@@ -198,7 +198,7 @@ class EvenSubmapTrimmer : public PoseGraphTrimmer {
   explicit EvenSubmapTrimmer(int trajectory_id)
       : trajectory_id_(trajectory_id) {}
 
-  void Trim(Trimmable* pose_graph) override {
+  void Trim(Trimmable* pose_graph, std::ostream* log = nullptr) override {
     auto submap_ids = pose_graph->GetSubmapIds(trajectory_id_);
     for (const auto submap_id : submap_ids) {
       if (submap_id.submap_index % 2 == 0) {

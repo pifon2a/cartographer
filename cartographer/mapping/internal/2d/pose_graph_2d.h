@@ -22,6 +22,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <fstream>
+#include <iostream>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -139,6 +141,52 @@ class PoseGraph2D : public PoseGraph {
       EXCLUDES(mutex_);
   transform::Rigid3d GetInterpolatedGlobalTrajectoryPose(
       int trajectory_id, const common::Time time) const REQUIRES(mutex_);
+
+  void FindInterTrajectoryConstraints() override {
+    // TODO(gaschler): Clean up this hack.
+    common::MutexLocker locker(&mutex_);
+    AddWorkItem([=]() REQUIRES(mutex_) {
+      for (const auto& submap_id_data : submap_data_) {
+        for (const auto& node_id_data : trajectory_nodes_) {
+          if (submap_id_data.id.trajectory_id !=
+                  node_id_data.id.trajectory_id &&
+              global_localization_samplers_[node_id_data.id.trajectory_id]
+                  ->Pulse()) {
+            const transform::Rigid2d initial_relative_pose =
+                optimization_problem_->submap_data()
+                    .at(submap_id_data.id)
+                    .global_pose.inverse() *
+                optimization_problem_->node_data().at(node_id_data.id).global_pose_2d;
+            constraint_builder_.MaybeAddConstraint(
+                submap_id_data.id,
+                submap_data_.at(submap_id_data.id).submap.get(),
+                node_id_data.id,
+                trajectory_nodes_.at(node_id_data.id).constant_data.get(),
+                initial_relative_pose);
+          }
+        }
+      }
+    });
+  }
+
+  void FindInterTrajectoryGlobalConstraints() override {
+    // TODO(gaschler): Clean up this hack.
+    common::MutexLocker locker(&mutex_);
+    AddWorkItem([=]() REQUIRES(mutex_) {
+      for (const auto& submap_id_data : submap_data_) {
+        for (const auto& node_id_data : trajectory_nodes_) {
+          if (submap_id_data.id.trajectory_id !=
+                  node_id_data.id.trajectory_id &&
+              global_localization_samplers_[node_id_data.id.trajectory_id]
+                  ->Pulse()) {
+            constraint_builder_.MaybeAddGlobalConstraint(
+                submap_id_data.id, submap_id_data.data.submap.get(),
+                node_id_data.id, node_id_data.data.constant_data.get());
+          }
+        }
+      }
+    });
+  }
 
  private:
   // The current state of the submap in the background threads. When this
@@ -273,6 +321,9 @@ class PoseGraph2D : public PoseGraph {
   std::map<int, InitialTrajectoryPose> initial_trajectory_poses_
       GUARDED_BY(mutex_);
 
+
+  std::unique_ptr<std::ofstream> log_file_;
+  int optimization_run_ = 0;
   // Allows querying and manipulating the pose graph by the 'trimmers_'. The
   // 'mutex_' of the pose graph is held while this class is used.
   class TrimmingHandle : public Trimmable {
