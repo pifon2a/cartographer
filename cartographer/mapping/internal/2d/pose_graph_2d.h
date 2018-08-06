@@ -140,6 +140,11 @@ class PoseGraph2D : public PoseGraph {
       const override EXCLUDES(mutex_);
   std::map<std::string /* landmark ID */, PoseGraph::LandmarkNode>
   GetLandmarkNodes() const override EXCLUDES(mutex_);
+
+  
+   std::vector<
+      std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>
+  GetLandmarkConstraints() const override EXCLUDES(mutex_);
   std::map<int, TrajectoryData> GetTrajectoryData() const override
       EXCLUDES(mutex_);
   std::vector<Constraint> constraints() const override EXCLUDES(mutex_);

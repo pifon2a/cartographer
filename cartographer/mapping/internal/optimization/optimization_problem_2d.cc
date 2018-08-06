@@ -66,15 +66,40 @@ transform::Rigid3d GetInitialLandmarkPose(
   const double interpolation_parameter =
       common::ToSeconds(observation.time - prev_node.time) /
       common::ToSeconds(next_node.time - prev_node.time);
+  LOG(INFO) << "prev_node.gravity_alignment == "
+            << transform::ToProto(prev_node.gravity_alignment).DebugString();
+  LOG(INFO) << "next_node.gravity_alignment == "
+            << transform::ToProto(next_node.gravity_alignment).DebugString();
+  const std::tuple<std::array<double, 4>, std::array<double, 3>>
+      rotation_and_translation =
+          InterpolateNodes2D(prev_node_pose.data(), prev_node.gravity_alignment,
+                             next_node_pose.data(), next_node.gravity_alignment,
+                             interpolation_parameter);
+  auto interpolated_point =
+      transform::Rigid3d::FromArrays(std::get<0>(rotation_and_translation),
+                                     std::get<1>(rotation_and_translation));
 
+  LOG(INFO) << " interpolated point == " << interpolated_point;
+  LOG(INFO) << "landmark to tracking = "
+            << observation.landmark_to_tracking_transform;
+  return interpolated_point * observation.landmark_to_tracking_transform;
+}
+
+transform::Rigid3d GetInterpolatedPose(
+    const LandmarkNode::LandmarkObservation& observation,
+    const NodeSpec2D& prev_node, const NodeSpec2D& next_node,
+    const std::array<double, 3>& prev_node_pose,
+    const std::array<double, 3>& next_node_pose) {
+  const double interpolation_parameter =
+      common::ToSeconds(observation.time - prev_node.time) /
+      common::ToSeconds(next_node.time - prev_node.time);
   const std::tuple<std::array<double, 4>, std::array<double, 3>>
       rotation_and_translation =
           InterpolateNodes2D(prev_node_pose.data(), prev_node.gravity_alignment,
                              next_node_pose.data(), next_node.gravity_alignment,
                              interpolation_parameter);
   return transform::Rigid3d::FromArrays(std::get<0>(rotation_and_translation),
-                                        std::get<1>(rotation_and_translation)) *
-         observation.landmark_to_tracking_transform;
+                                        std::get<1>(rotation_and_translation));
 }
 
 void AddLandmarkCostFunctions(
@@ -117,6 +142,9 @@ void AddLandmarkCostFunctions(
                 ? landmark_node.second.global_landmark_pose.value()
                 : GetInitialLandmarkPose(observation, prev->data, next->data,
                                          *prev_node_pose, *next_node_pose);
+
+        LOG(INFO) << "!!! landmark " << landmark_id
+                  << "starting point = " << starting_point;
         C_landmarks->emplace(
             landmark_id,
             CeresPose(starting_point, nullptr /* translation_parametrization */,
@@ -139,6 +167,62 @@ void AddLandmarkCostFunctions(
   }
 }
 
+void UpdateLandmarkConstraints(
+    const std::map<std::string, LandmarkNode>& landmark_nodes,
+    const MapById<NodeId, NodeSpec2D>& node_data,
+    MapById<NodeId, std::array<double, 3>>* C_nodes,
+    std::vector<
+        std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>* out) {
+  out->clear();
+
+  int64 max_time = 0;
+  for (const auto& landmark_node : landmark_nodes) {
+    for (const auto& observation : landmark_node.second.landmark_observations) {
+      max_time = std::max(max_time, common::ToUniversal(observation.time));
+    }
+  }
+  auto max_clock = common::FromUniversal(max_time) - common::FromSeconds(10);
+  for (const auto& landmark_node : landmark_nodes) {
+    // Do not use landmarks that were not optimized for localization.
+    if (!landmark_node.second.global_landmark_pose.has_value()) {
+      continue;
+    }
+    for (const auto& observation : landmark_node.second.landmark_observations) {
+      if (observation.time < max_clock) continue;
+      const std::string& landmark_id = landmark_node.first;
+      const auto& begin_of_trajectory =
+          node_data.BeginOfTrajectory(observation.trajectory_id);
+      // The landmark observation was made before the trajectory was created.
+      if (observation.time < begin_of_trajectory->data.time) {
+        continue;
+      }
+      // Find the trajectory nodes before and after the landmark observation.
+      auto next =
+          node_data.lower_bound(observation.trajectory_id, observation.time);
+      // The landmark observation was made, but the next trajectory node has
+      // not been added yet.
+      if (next == node_data.EndOfTrajectory(observation.trajectory_id)) {
+        continue;
+      }
+      if (next == begin_of_trajectory) {
+        next = std::next(next);
+      }
+      auto prev = std::prev(next);
+      // Add parameter blocks for the landmark ID if they were not added before.
+      std::array<double, 3>* prev_node_pose = &C_nodes->at(prev->id);
+      std::array<double, 3>* next_node_pose = &C_nodes->at(next->id);
+      auto interpolated_pose =
+          GetInterpolatedPose(observation, prev->data, next->data,
+                              *prev_node_pose, *next_node_pose);
+       out->push_back(std::make_tuple(
+          landmark_id, interpolated_pose,
+          interpolated_pose * observation.landmark_to_tracking_transform));
+      //out->push_back(
+      //    std::make_tuple(landmark_id, interpolated_pose,
+      //                    landmark_node.second.global_landmark_pose.value()));
+    }
+  }
+}
 }  // namespace
 
 OptimizationProblem2D::OptimizationProblem2D(
@@ -326,6 +410,9 @@ void OptimizationProblem2D::Solve(
   for (const auto& C_landmark : C_landmarks) {
     landmark_data_[C_landmark.first] = C_landmark.second.ToRigid();
   }
+
+  UpdateLandmarkConstraints(landmark_nodes, node_data_, &C_nodes,
+                            &landmark_constraints_);
 }
 
 std::unique_ptr<transform::Rigid3d> OptimizationProblem2D::InterpolateOdometry(

@@ -77,6 +77,10 @@ class OptimizationProblemInterface {
   virtual const MapById<SubmapId, SubmapDataType>& submap_data() const = 0;
   virtual const std::map<std::string, transform::Rigid3d>& landmark_data()
       const = 0;
+
+  virtual const std::vector<
+      std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>&
+  landmark_constraints() const =0;
   virtual const sensor::MapByTime<sensor::ImuData>& imu_data() const = 0;
   virtual const sensor::MapByTime<sensor::OdometryData>& odometry_data()
       const = 0;

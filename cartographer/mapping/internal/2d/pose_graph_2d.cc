@@ -881,6 +881,12 @@ std::map<std::string, transform::Rigid3d> PoseGraph2D::GetLandmarkPoses()
   return landmark_poses;
 }
 
+std::vector<std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>
+PoseGraph2D::GetLandmarkConstraints() const {
+  common::MutexLocker locker(&mutex_);
+  return optimization_problem_->landmark_constraints();
+}
+
 void PoseGraph2D::SetLandmarkPose(const std::string& landmark_id,
                                   const transform::Rigid3d& global_pose) {
   AddWorkItem([=]() EXCLUDES(mutex_) {

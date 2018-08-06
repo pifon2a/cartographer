@@ -100,6 +100,11 @@ class OptimizationProblem3D
       const override {
     return odometry_data_;
   }
+  const std::vector<
+      std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>&
+  landmark_constraints() const override {
+    return landmark_constraints_;
+  };
 
   void AddFixedFramePoseData(
       int trajectory_id,
@@ -127,6 +132,8 @@ class OptimizationProblem3D
   MapById<SubmapId, SubmapSpec3D> submap_data_;
   std::map<std::string, transform::Rigid3d> landmark_data_;
   sensor::MapByTime<sensor::ImuData> imu_data_;
+  std::vector<std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>
+      landmark_constraints_;
   sensor::MapByTime<sensor::OdometryData> odometry_data_;
   sensor::MapByTime<sensor::FixedFramePoseData> fixed_frame_pose_data_;
   std::map<int, PoseGraphInterface::TrajectoryData> trajectory_data_;

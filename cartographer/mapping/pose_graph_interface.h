@@ -114,6 +114,12 @@ class PoseGraphInterface {
   virtual MapById<NodeId, TrajectoryNodePose> GetTrajectoryNodePoses()
       const = 0;
 
+  virtual std::vector<
+      std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>
+  GetLandmarkConstraints() const {
+    return {};
+  }
+
   // Returns the states of trajectories.
   virtual std::map<int, TrajectoryState> GetTrajectoryStates() const = 0;
 

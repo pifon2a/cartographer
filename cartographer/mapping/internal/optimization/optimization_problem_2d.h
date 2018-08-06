@@ -93,6 +93,11 @@ class OptimizationProblem2D
       const override {
     return landmark_data_;
   }
+  const std::vector<
+      std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>&
+  landmark_constraints() const override {
+    return landmark_constraints_;
+  };
   const sensor::MapByTime<sensor::ImuData>& imu_data() const override {
     return imu_data_;
   }
@@ -113,6 +118,8 @@ class OptimizationProblem2D
   MapById<NodeId, NodeSpec2D> node_data_;
   MapById<SubmapId, SubmapSpec2D> submap_data_;
   std::map<std::string, transform::Rigid3d> landmark_data_;
+  std::vector<std::tuple<std::string, transform::Rigid3d, transform::Rigid3d>>
+      landmark_constraints_;
   sensor::MapByTime<sensor::ImuData> imu_data_;
   sensor::MapByTime<sensor::OdometryData> odometry_data_;
 };
